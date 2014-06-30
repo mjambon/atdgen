@@ -1,4 +1,4 @@
-VERSION = 1.3.1
+VERSION = 2.0.0
 ifeq "$(shell ocamlc -config |grep os_type)" "os_type: Win32"
 EXE=.exe
 else
@@ -43,6 +43,11 @@ SOURCES_VALIDATE = \
   ag_ov_mapping.ml \
   ag_ov_emit.ml
 
+# Command-line processing, one file per target programming language
+SOURCES_CMDLINE = \
+  ag_cmdline.ml \
+  ag_ox_main.ml
+
 # OCaml runtime library
 SOURCES_RUNTIME = \
   ag_ob_run.ml \
@@ -52,7 +57,7 @@ SOURCES_RUNTIME = \
 
 SOURCES = \
   $(SOURCES_SHARED) $(SOURCES_BINIOU) $(SOURCES_JSON) $(SOURCES_VALIDATE) \
-  $(SOURCES_RUNTIME)
+  $(SOURCES_CMDLINE) $(SOURCES_RUNTIME)
 
 DOCFILES = ag_doc ag_util
 DOCSOURCES = $(addsuffix .mli, $(DOCFILES))
