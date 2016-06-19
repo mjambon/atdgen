@@ -143,7 +143,7 @@ let nth name i len =
 
 type default_field =
 | Default of string
-| Checked of int
+| Checked
 
 type parse_field = {
   mapping     : (o, j) field_mapping;
@@ -177,7 +177,7 @@ let get_fields p a =
               | Some d -> o, Default d, j, k
               )
           | `Optional -> o, Default "None", j, k
-          | `Required -> o, Checked k, j, k+1
+          | `Required -> o, Checked, j, k+1
           )
       | _ -> assert false
     in
@@ -241,7 +241,7 @@ let get_fields p a =
         } in
         let imp = {
           mapping = mapping;
-          default = Checked k;
+          default = Checked;
           ocamlf = ocamlf;
           jsonf = jsonf;
           field_ref = "field_"^f_name;
@@ -435,8 +435,8 @@ let make_sum_writer p sum f =
   ]
 
 let is_optional = function
-  | { default=Default _ } -> true
-  | { default=Checked _ } -> false
+  | { default = Default _ } -> true
+  | { default = Checked } -> false
 
 let unwrap p { jsonf=jsonf; mapping=mapping } =
   if jsonf.Ag_json.json_unwrapped
@@ -661,7 +661,7 @@ and make_record_writer p a record_kind =
         `Line ");"
       ]
     else match field.default with
-    | Checked _ -> f v
+    | Checked -> f v
     | Default _ when p.force_defaults -> f v
     | Default d ->
       [
@@ -742,19 +742,14 @@ and make_record_writer p a record_kind =
   ]
 
 let study_record p fields =
-  let unset_field_value = match p.ocaml_version with
-    | Some (maj, min) when (maj > 4 || maj = 4 && min >= 3) ->
-      "Obj.magic (Sys.opaque_identity 0.0)"
-    | _ -> "Obj.magic 0.0" in
-
-  let _, field_assignments =
-    Array.fold_right (fun field (i, field_assignments) ->
+  let field_assignments =
+    Array.fold_right (fun field field_assignments ->
       let v = match field.default with
-        | Checked _ -> unset_field_value
-        | Default s -> s
+        | Checked -> "None"
+        | Default s -> sprintf "( %s )" s
       in
       let field_ref = field.field_ref in
-      let init_f = `Line (sprintf "let %s = ref (%s) in" field_ref v) in
+      let init_f = `Line (sprintf "let %s = ref %s in" field_ref v) in
       let init = match field.constructor with
         | None -> init_f
         | Some _constr_i ->
@@ -770,72 +765,27 @@ let study_record p fields =
         then `Block [] (* implicit fields don't have realizations in OCaml *)
         else
           let oname = field.ocamlf.Ag_ocaml.ocaml_fname in
-          `Line (sprintf "%s = !field_%s;" oname oname)
+          let jname = field.jsonf.Ag_json.json_fname in
+          match field.default with
+          | Checked ->
+              `Line (
+                sprintf "%s = \
+                  (match !field_%s with \
+                     Some x -> x \
+                   | None -> Ag_oj_run.missing_field p %S);"
+                  oname oname jname
+              )
+          | Default _ ->
+              `Line (sprintf "%s = !field_%s;" oname oname)
       in
-      (i + 1, (init, create) :: field_assignments)
-    ) fields (0,[])
+      ((init, create) :: field_assignments)
+    ) fields []
   in
   let init_fields, create_record_fields = List.split field_assignments in
 
   let create_record = [ `Line "{"; `Block create_record_fields; `Line "}" ] in
 
-  let n = Array.fold_left (fun n -> function
-    | { default = Checked k } -> max n (k + 1)
-    | { default = Default _ } -> n
-  ) 0 fields in
-
-  let k = n / 31 + (if n mod 31 > 0 then 1 else 0) in
-  let init_bits =
-    Array.to_list (
-      Array.init k (
-        fun i -> `Line (sprintf "let bits%i = ref 0 in" i)
-      )
-    )
-  in
-  let final_bits = Array.make k 0 in
-  for z = 0 to n - 1 do
-    let i = z / 31 in
-    let j = z mod 31 in
-    final_bits.(i) <- final_bits.(i) lor (1 lsl j);
-  done;
-  let set_bit z =
-    let i = z / 31 in
-    let j = z mod 31 in
-    `Line (sprintf "bits%i := !bits%i lor 0x%x;" i i (1 lsl j))
-  in
-
-  let check_bits =
-    let bool_expr =
-      String.concat " || " (
-        Array.to_list (
-          Array.mapi (
-            fun i x -> sprintf "!bits%i <> 0x%x" i x
-          ) final_bits
-        )
-      )
-    in
-    let bit_fields =
-      let a = Array.init k (fun i -> sprintf "!bits%i" i) in
-      sprintf "[| %s |]" (String.concat "; " (Array.to_list a))
-    in
-    let field_names =
-      let _, l =
-        Array.fold_left (
-          fun (i,acc) field -> match field.default with
-          | Checked k ->
-            assert (k = i);
-            (i + 1, sprintf "%S" field.mapping.f_name :: acc)
-          | Default _ -> (i,acc)
-        ) (0,[]) fields
-      in
-      sprintf "[| %s |]" (String.concat "; " (List.rev l))
-    in
-    if k = 0 then []
-    else
-      [ `Line (sprintf "if %s then Ag_oj_run.missing_fields p %s %s;"
-                 bool_expr bit_fields field_names) ]
-  in
-  init_fields, init_bits, set_bit, check_bits, create_record
+  init_fields, create_record
 
 let rec make_reader p type_annot (x : oj_mapping) : Ag_indent.t list =
   match x with
@@ -1092,15 +1042,11 @@ and make_variant_reader p type_annot tick std x : (string * Ag_indent.t list) =
   in
   (json_cons, expr)
 
-and make_deconstructed_reader p loc fields set_bit =
+and make_deconstructed_reader p loc fields =
   let v_of_field field = "!" ^ field.field_ref in
   let reconstruct_field constrf payloadf =
     let ocaml_name = payloadf.ocamlf.Ag_ocaml.ocaml_fname in
     let mapping = payloadf.mapping in
-    let set_bit = match payloadf.default with
-      | Default _ -> []
-      | Checked k -> [set_bit k]
-    in
     match p.deref mapping.f_value with
     | `Sum (loc, a, `Sum x, `Sum) ->
       let s = string_expr_of_constr_field p v_of_field constrf in
@@ -1121,37 +1067,37 @@ and make_deconstructed_reader p loc fields set_bit =
             let json_cons = j.Ag_json.json_cons in
             let expr = match x.var_arg with
               | None -> [
-                `Line (sprintf "let loc = raw_%s in" ocaml_name);
-                `Line "if loc.Yojson.lnum <> -1";
-                `Line "then (";
-                (* TODO: should this be a different warning/error? *)
-                (match p.unknown_field_handler with
-                  None -> `Line "();"
-                | Some f ->
-                  `Line (sprintf "(%s) %S %S;"
-                           f (Atd_ast.string_of_loc loc) mapping.f_name));
-                `Line (sprintf "%s := %s%s"
-                         payloadf.field_ref tick ocaml_cons);
-                `Line ") else (";
-                `Inline set_bit;
-                `Line (sprintf "%s := %s%s);"
-                         payloadf.field_ref tick ocaml_cons);
-              ]
+                  `Line (sprintf "let loc = raw_%s in" ocaml_name);
+                  `Line "if loc.Yojson.lnum <> -1";
+                  `Line "then (";
+                  (* TODO: should this be a different warning/error? *)
+                  (match p.unknown_field_handler with
+                     None -> `Line "();"
+                   | Some f ->
+                       `Line (sprintf "(%s) %S %S;"
+                                f (Atd_ast.string_of_loc loc) mapping.f_name)
+                  );
+                  `Line (sprintf "%s := %s%s"
+                           payloadf.field_ref tick ocaml_cons);
+                  `Line ") else (";
+                  `Line (sprintf "%s := %s%s);"
+                           payloadf.field_ref tick ocaml_cons);
+                ]
               | Some v -> [
-                `Line (sprintf "let loc = raw_%s in" ocaml_name);
-                `Line "if loc.Yojson.lnum <> -1";
-                `Line "then (let raw = Bi_outbuf.contents loc.Yojson.buf in";
-                `Line "Bi_outbuf.clear loc.Yojson.buf;";
-                `Line "let lb = Lexing.from_string raw in";
-                `Line "let x = (";
-                `Block [
-                  `Block (make_reader p None v);
-                  `Line ") loc lb";
-                ];
-                `Line "in";
-                `Line (sprintf "%s := %s%s x);"
-                         payloadf.field_ref tick ocaml_cons);
-              ]
+                  `Line (sprintf "let loc = raw_%s in" ocaml_name);
+                  `Line "if loc.Yojson.lnum <> -1";
+                  `Line "then (let raw = Bi_outbuf.contents loc.Yojson.buf in";
+                  `Line "Bi_outbuf.clear loc.Yojson.buf;";
+                  `Line "let lb = Lexing.from_string raw in";
+                  `Line "let x = (";
+                  `Block [
+                    `Block (make_reader p None v);
+                    `Line ") loc lb";
+                  ];
+                  `Line "in";
+                  `Line (sprintf "%s := %s%s x);"
+                           payloadf.field_ref tick ocaml_cons);
+                ]
             in
             (json_cons, expr)
           ) a)
@@ -1216,28 +1162,25 @@ and make_deconstructed_reader p loc fields set_bit =
           `Block (reconstruct_field constr field);
           `Line ");";
         ])::updates
-      | Checked k ->
-        let i = k / 31 in
-        let j = 1 lsl (k mod 31) in
+      | Checked ->
         (`Block [
-          `Line (sprintf "if !bits%i land 0x%x = 0x%x" i j j);
+          `Line (sprintf "if (* field is set? *) true");
           `Line "then (";
           `Block (reconstruct_field constr field);
           `Line ")";
           match field.default with
           | Default _ when constr.implicit ->
             `Block [
-              `Line "else (";
-              set_bit k;
+              `Line "else ( (* set_bit k *)";
               `Line ");";
             ]
-          | Default _ | Checked _ -> `Line ";"
+          | Default _ | Checked -> `Line ";"
         ])::updates
   ) [] toposorted_fields
 
 and make_record_reader p type_annot loc a record_kind =
   let fields = get_fields p a in
-  let init_fields, init_bits, set_bit, check_bits, create_record =
+  let init_fields, create_record =
     study_record p fields
   in
 
@@ -1282,18 +1225,12 @@ and make_record_reader p type_annot loc a record_kind =
               `Line "Bi_outbuf.clear p.Yojson.buf;";
               `Line "Bi_outbuf.clear loc.Yojson.buf;";
               `Line "Bi_outbuf.add_string loc.Yojson.buf raw";
-              `Line ");";
-              match field.default with
-              | Checked k -> set_bit k
-              | Default _ -> `Inline []
+              `Line ");"
             ]
             | None -> [
               `Line (sprintf "field_%s := (" ocaml_fname);
               `Block (wrap read_value);
-              `Line ");";
-              match field.default with
-              | Checked k -> set_bit k
-              | Default _ -> `Inline []
+              `Line ");"
             ]
           in
           let opt_expr = match field.default with
@@ -1303,7 +1240,7 @@ and make_record_reader p type_annot loc a record_kind =
                 `Block expr;
                 `Line ")"
               ]
-            | Checked _ ->
+            | Checked ->
               expr
           in
           (jsonf.Ag_json.json_fname, opt_expr)
@@ -1341,7 +1278,7 @@ and make_record_reader p type_annot loc a record_kind =
     | { constructor = Some _ } -> true
     | { constructor = None   } -> false
     ) (Array.to_list fields)
-    then make_deconstructed_reader p loc fields set_bit
+    then make_deconstructed_reader p loc fields
     else []
   in
 
@@ -1349,7 +1286,6 @@ and make_record_reader p type_annot loc a record_kind =
     `Line "Yojson.Safe.read_space p lb;";
     `Line "Yojson.Safe.read_lcurl p lb;";
     `Inline init_fields;
-    `Inline init_bits;
     `Line "try";
     `Block [
       `Line "Yojson.Safe.read_space p lb;";
@@ -1368,7 +1304,6 @@ and make_record_reader p type_annot loc a record_kind =
     `Block [
       `Block [
         `Inline update_deconstructed_fields;
-        `Inline check_bits;
         `Line "(";
         `Block create_record;
         `Line (sprintf "%s)" (Ag_ox_emit.insert_annot type_annot));
