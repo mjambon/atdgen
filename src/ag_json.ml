@@ -12,7 +12,7 @@ type json_variant = { json_cons : string }
 type json_field = {
   json_fname  : string;           (* <json name=...> *)
   json_tag_field : string option; (* <json tag_field=...> *)
-  json_unwrapped : bool
+  json_optional : bool            (* ?name : x option *)
 }
 
 type json_repr =

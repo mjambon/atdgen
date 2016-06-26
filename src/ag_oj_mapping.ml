@@ -136,7 +136,7 @@ and mapping_of_variant = function
 and mapping_of_field ocaml_field_prefix = function
     `Field (loc, (s, fk, an), x) ->
       let fvalue = mapping_of_expr x in
-      let ocaml_default, json_unwrapped =
+      let ocaml_default, json_optional =
        match fk, Ag_ocaml.get_ocaml_default an with
            `Required, None -> None, false
          | `Optional, None -> Some "None", true
@@ -167,7 +167,7 @@ and mapping_of_field ocaml_field_prefix = function
         f_brepr = `Field {
           Ag_json.json_fname = json_fname;
           json_tag_field = json_tag_field;
-          json_unwrapped = json_unwrapped
+          json_optional = json_optional
         };
       }
 

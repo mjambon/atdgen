@@ -790,8 +790,6 @@ let unwrap_option deref x =
     | x ->
         Ag_error.error (loc_of_mapping x) "Not an option type"
 
-
-
 let get_implicit_ocaml_default deref x =
   match deref x with
       `Unit (loc, `Unit, _) -> Some "()"

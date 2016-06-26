@@ -199,7 +199,6 @@ let missing_tuple_fields p len req_fields =
            (if List.length missing > 1 then "s" else "")
            (String.concat ", " (List.map string_of_int missing)))
 
-
 let missing_fields p bit_fields field_names =
   let acc = ref [] in
   for z = Array.length field_names - 1 downto 0 do
@@ -212,9 +211,11 @@ let missing_fields p bit_fields field_names =
            (if List.length !acc > 1 then "s" else "")
            (String.concat ", " !acc))
 
+let missing_field p field_name =
+  error_with_line p (sprintf "Missing record field %s" field_name)
+
 let invalid_variant_tag p s =
   error_with_line p (sprintf "Unsupported variant %S" s)
-
 
 (* We want an identity function that is not inlined *)
 type identity_t = { mutable _identity : 'a. 'a -> 'a }

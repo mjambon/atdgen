@@ -228,7 +228,7 @@ let get_fields p a =
         let jsonf = {
           Ag_json.json_fname = constr;
           json_tag_field = None;
-          json_unwrapped = false;
+          json_optional = false;
         } in
         let synloc = (Lexing.dummy_pos, Lexing.dummy_pos) in
         let mapping = {
@@ -439,7 +439,7 @@ let is_optional = function
   | { default = Checked } -> false
 
 let unwrap p { jsonf=jsonf; mapping=mapping } =
-  if jsonf.Ag_json.json_unwrapped
+  if jsonf.Ag_json.json_optional
   then Ag_ocaml.unwrap_option p.deref mapping.f_value
   else mapping.f_value
 
@@ -654,7 +654,7 @@ and make_record_writer p a record_kind =
   in
   let apply p f field =
     let v = v_of_field field in
-    if field.jsonf.Ag_json.json_unwrapped then
+    if field.jsonf.Ag_json.json_optional then
       [
         `Line (sprintf "(match %s with None -> () | Some x ->" v);
         `Block (f "x");
@@ -1188,13 +1188,23 @@ and make_record_reader p type_annot loc a record_kind =
     let cases =
       Array.mapi (fun i field ->
         let { ocamlf = ocamlf; jsonf = jsonf; mapping = x } = field in
-        let unwrapped = jsonf.Ag_json.json_unwrapped in
+        let uses_ocaml_option =
+          (* whether the temporary value must be initialized with
+             None:
+             - required fields
+             - optional fields without a default
+          *)
+          x.f_kind = `Required
+          || jsonf.Ag_json.json_optional
+        in
         let f_value =
-          if unwrapped then Ag_ocaml.unwrap_option p.deref x.f_value
-          else x.f_value
+          if jsonf.Ag_json.json_optional then
+            Ag_ocaml.unwrap_option p.deref x.f_value
+          else
+            x.f_value
         in
           let wrap l =
-            if unwrapped then
+            if uses_ocaml_option then
               [
                 `Line "Some (";
                 `Block l;

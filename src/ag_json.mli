@@ -10,7 +10,7 @@ type json_field = {
   json_fname  : string;           (* <json name=...> *)
   json_tag_field : string option; (* <json tag_field=...> *)
 
-  json_unwrapped : bool
+  json_optional : bool
     (* indicates a JSON optional field: instead of representing the value
        None as a JSON value or wrap a value with some constructor,
        the absence of a value is represented by the absence of a JSON field,
