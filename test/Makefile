@@ -11,9 +11,11 @@ ATDGEN = ../src/atdgen$(EXE)
 
 test:
 	$(MAKE) -C ../src
-	OCAMLPATH=..:$$OCAMLPATH $(MAKE) really-test
+	OCAMLPATH=../..:$$OCAMLPATH $(MAKE) really-test
 
 really-test:
+	echo $$OCAMLPATH
+	ocamlfind query atdgen
 	$(ATDGEN) test.atd
 	$(ATDGEN) test2.atd
 	$(ATDGEN) -json -extend Test \
